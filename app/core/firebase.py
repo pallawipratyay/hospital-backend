@@ -1,5 +1,7 @@
-﻿import os
+﻿import json
+import os
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import firebase_admin
@@ -8,50 +10,46 @@ from firebase_admin import auth, credentials, firestore
 from app.core.config import settings
 
 
-def _credentials_from_json_or_path(value: str):
-    value = value.strip()
-    # firebase_admin.credentials.Certificate accepts either:
-    # - a filesystem path to a service account JSON file
-    # - the JSON string itself (commonly injected as an env var)
-    return credentials.Certificate(value)
+def _load_credentials() -> credentials.Certificate:
+    firebase_credentials = os.getenv("FIREBASE_CREDENTIALS", "").strip()
+    if firebase_credentials:
+        try:
+            service_account_info = json.loads(firebase_credentials)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("FIREBASE_CREDENTIALS is not valid JSON.") from exc
+        return credentials.Certificate(service_account_info)
 
+    credentials_path = settings.firebase_credentials_path or os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+    credentials_path = str(credentials_path).strip()
 
+    if credentials_path.startswith("{"):
+        try:
+            service_account_info = json.loads(credentials_path)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("FIREBASE_CREDENTIALS_PATH contains invalid JSON.") from exc
+        return credentials.Certificate(service_account_info)
+
+    if credentials_path:
+        credentials_file = Path(credentials_path)
+        if credentials_file.is_file():
+            return credentials.Certificate(str(credentials_file))
+        raise RuntimeError(f"Firebase credentials file not found at: {credentials_path}")
+
+    local_file = Path(__file__).resolve().parents[2] / "firebase-adminsdk.json"
+    if local_file.is_file():
+        return credentials.Certificate(str(local_file))
+
+    raise RuntimeError(
+        "Firebase credentials not configured. Set FIREBASE_CREDENTIALS env var with service account JSON "
+        "or provide a local firebase-adminsdk.json file for development."
+    )
 
 
 def initialize_firebase() -> None:
     if firebase_admin._apps:
         return
 
-    credentials_path = settings.firebase_credentials_path or os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-
-    # Normalize Render-provided env quirks.
-    if credentials_path and isinstance(credentials_path, str):
-        credentials_path = credentials_path.strip()
-        # If the value is clearly invalid (e.g. just "{"), treat as missing.
-        if credentials_path == "{":
-            credentials_path = ""
-
-
-
-    # Render often injects Firebase credentials as an env var containing JSON.
-    # Support both:
-    # - credentials_path pointing to a JSON file
-    # - credentials JSON string directly
-    if not credentials_path:
-        firebase_admin.initialize_app(credentials.ApplicationDefault())
-        return
-
-    # If Render provides credentials as inline JSON, skip file loading.
-    credentials_path = credentials_path.strip()
-    if credentials_path.startswith("{"):
-        # credentials.Certificate accepts an object or path depending on firebase-admin version.
-        # Passing JSON string is the most reliable across environments.
-        cred = credentials.Certificate(credentials_path)
-        firebase_admin.initialize_app(cred)
-        return
-
-    # Otherwise treat it as a filesystem path.
-    cred = credentials.Certificate(credentials_path)
+    cred = _load_credentials()
     firebase_admin.initialize_app(cred)
 
 
