@@ -8,17 +8,52 @@ from firebase_admin import auth, credentials, firestore
 from app.core.config import settings
 
 
+def _credentials_from_json_or_path(value: str):
+    value = value.strip()
+    # firebase_admin.credentials.Certificate accepts either:
+    # - a filesystem path to a service account JSON file
+    # - the JSON string itself (commonly injected as an env var)
+    return credentials.Certificate(value)
+
+
+
+
 def initialize_firebase() -> None:
     if firebase_admin._apps:
         return
 
     credentials_path = settings.firebase_credentials_path or os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-    if credentials_path:
-        cred = credentials.Certificate(credentials_path)
-    else:
-        cred = credentials.ApplicationDefault()
 
+    # Normalize Render-provided env quirks.
+    if credentials_path and isinstance(credentials_path, str):
+        credentials_path = credentials_path.strip()
+        # If the value is clearly invalid (e.g. just "{"), treat as missing.
+        if credentials_path == "{":
+            credentials_path = ""
+
+
+
+    # Render often injects Firebase credentials as an env var containing JSON.
+    # Support both:
+    # - credentials_path pointing to a JSON file
+    # - credentials JSON string directly
+    if not credentials_path:
+        firebase_admin.initialize_app(credentials.ApplicationDefault())
+        return
+
+    # If Render provides credentials as inline JSON, skip file loading.
+    credentials_path = credentials_path.strip()
+    if credentials_path.startswith("{"):
+        # credentials.Certificate accepts an object or path depending on firebase-admin version.
+        # Passing JSON string is the most reliable across environments.
+        cred = credentials.Certificate(credentials_path)
+        firebase_admin.initialize_app(cred)
+        return
+
+    # Otherwise treat it as a filesystem path.
+    cred = credentials.Certificate(credentials_path)
     firebase_admin.initialize_app(cred)
+
 
 
 def get_firestore_client() -> firestore.Client:
