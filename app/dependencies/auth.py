@@ -46,7 +46,7 @@ async def get_current_user(authorization: str | None = Header(None)) -> UserCont
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
 
     user_data = user_doc.to_dict() or {}
-    role = user_data.get("role")
+    role = user_data.get("role", "").lower()
     if not role:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User role missing")
 
